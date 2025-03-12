@@ -1,0 +1,116 @@
+---
+#title: "MASTIF_App_temp"
+#output: html_document
+#date: "2024-12-06"
+---
+``` {r shiny code}
+library(shiny)
+library(shinyWidgets)
+library(leaflet)
+library(dplyr)
+library(showtext)
+library(tidyr)
+
+
+font_add_google("Montserrat", "MS")
+showtext_auto()
+
+# Define UI for the app
+ui <- fluidPage(
+  setBackgroundColor("black"),
+  tags$h1("California Mast Prediction Tool", style = "color: white; font-family: 'MS'"),
+  
+  sidebarLayout(
+    sidebarPanel(
+      numericInput("year", "Select Year:", value = 2010, min = 1990, max = 2020),
+      actionButton("loadMap", "Load and Map Precipitation"),
+      checkboxGroupInput("species_selected", "Select Species for Map:", choices = NULL),
+      actionButton("selectAll", "Select All Species"),
+      actionButton("uncheckAll", "Uncheck All Species")
+    ),
+    mainPanel(
+      leafletOutput("map"),
+      textOutput("statusText")
+    )
+  )
+)
+
+# Define server logic
+server <- function(input, output, session) {
+
+  # Reactive value to store species data
+  species_data <- reactiveVal(NULL)
+  
+  # Load data and update species choices
+  observeEvent(input$loadMap, {
+    req(input$year)  # Ensure a year is selected
+    list<-c("oaks_fecundity_mod.csv","pine_fecundity.csv","abies_fecundity.csv")
+    fec<-NULL
+    
+    
+    tryCatch({
+      for(i in list) {
+    github_url <- paste0("https://raw.githubusercontent.com/dchuebner/calMASTIFcone/main/",i)
+      # Load data and filter by selected year and species
+       f<- read.csv(github_url)%>%
+        drop_na()%>%
+         dplyr::select(Species,TREE_ID,X,Y,Year,logF_current)
+       fec<-rbind(fec,f)
+      }
+      species_data(fec)  # Save data globally for map usage
+
+      
+      # Update checkbox options with unique species names
+      updateCheckboxGroupInput(session, "species_selected", choices = unique(fec$Species))
+      output$statusText <- renderText("Data loaded successfully.")
+      
+    }, error = function(e) {
+      output$statusText <- renderText("Error loading data.")
+      message("Error: ", e$message)
+    })
+  })
+  
+  # Observe "Select All" button click
+  observeEvent(input$selectAll, {
+    updateCheckboxGroupInput(session, "species_selected", selected = unique(species_data()$Species))
+  })
+  
+  # Observe "Uncheck All" button click
+  observeEvent(input$uncheckAll, {
+    updateCheckboxGroupInput(session, "species_selected", selected = character(0))
+  })
+  
+  # Map rendering based on selected species
+  output$map <- renderLeaflet({
+    req(species_data())  # Ensure data is loaded
+    selected_species <- input$species_selected
+    
+    # Filter data based on selected species
+    filtered_data <- species_data() %>% filter(Species %in% selected_species)
+    
+    # Define color palette
+    fec_val <- filtered_data$logF_current
+    #pal<-colorNumeric(c("red", "blue"), fec_val)
+    pal<-colorQuantile(c("red", "blue"), fec_val)
+    # Create popup content
+    popup_content <- paste0(
+      "<b>Species: </b>", filtered_data$Species, "<br>",
+      "<b>Tree: </b>", filtered_data$TREE_ID, "<br>",
+      "<b>Predicted Fecundity (log scale): </b>", filtered_data$logF_current, "<br>"
+    )
+    
+    # Generate the map
+    leaflet(filtered_data) %>%
+      addTiles() %>%
+      addCircleMarkers(
+        lng = ~X, lat = ~Y, radius = 3, color = ~pal(fec_val),
+        opacity = 0.8, popup = popup_content
+      ) %>%
+      addLegend("bottomright", pal = pal, values = ~fec_val, title = "", opacity = 1)
+  })
+}
+
+# Run the app
+shinyApp(ui = ui, server = server)
+
+```
