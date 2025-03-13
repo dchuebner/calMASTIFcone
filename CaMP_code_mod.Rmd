@@ -50,7 +50,7 @@ server <- function(input, output, session) {
   # Load data and update species choices
   observeEvent(input$loadMap, {
     req(input$year)  # Ensure a year is selected
-    list<-c("oaks_fecundity_mod.csv","pine_fecundity.csv","abies_fecundity.csv")
+    list<-c("oaks_fecundity_XYmod.csv","pine_fecundity_XYmod.csv","abies_fecundity_XYmod.csv")
     fec<-NULL
     
     
