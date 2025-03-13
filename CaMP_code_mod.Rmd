@@ -1,0 +1,955 @@
+---
+title: "CaMP: California Mast Prediction Tool"
+output: html_document
+date: "2024-10-01"
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+``` {r shiny code}
+library(shiny)
+library(shinyWidgets)
+library(leaflet)
+library(dplyr)
+library(showtext)
+library(tidyr)
+
+font_add_google("Montserrat", "MS")
+showtext_auto()
+
+# Define UI for the app
+ui <- fluidPage(
+  setBackgroundColor("black"),
+  tags$h1("California Mast Prediction Tool", style = "color: white; font-family: 'MS'"),
+  
+  sidebarLayout(
+    sidebarPanel(
+      numericInput("year", "Select Year:", value = 2010, min = 1990, max = 2020),
+      actionButton("loadMap", "Load and Map Precipitation"),
+      checkboxGroupInput("species_selected", "Select Species for Map:", choices = NULL),
+      actionButton("selectAll", "Select All Species"),
+      actionButton("uncheckAll", "Uncheck All Species")
+    ),
+    mainPanel(
+      leafletOutput("map"),
+      textOutput("statusText")
+    )
+  )
+)
+
+# Define server logic
+server <- function(input, output, session) {
+
+  # Reactive value to store species data
+  species_data <- reactiveVal(NULL)
+  
+  # Load data and update species choices
+  observeEvent(input$loadMap, {
+    req(input$year)  # Ensure a year is selected
+    list<-c("oaks_fecundity.csv","pine_fecundity.csv","abies_fecundity.csv")
+    fec<-NULL
+    
+    
+    tryCatch({
+      for(i in list) {
+    github_url <- paste0("https://raw.githubusercontent.com/r-alex-thompson/calMastif/main/",i)
+      # Load data and filter by selected year and species
+       f<- read.csv(github_url)%>%
+        drop_na()%>%
+         dplyr::select(Species,TREE_ID,X,Y,Year,logF_current)
+       fec<-rbind(fec,f)
+      }
+      fec <- fec %>%
+        group_by(Species, TREE_ID) %>%
+        mutate(fec_ntile = ntile(logF_current, n = 4))
+      
+      species_data(fec)  # Save data globally for map usage
+
+      
+      # Update checkbox options with unique species names
+      updateCheckboxGroupInput(session, "species_selected", choices = unique(fec$Species))
+      output$statusText <- renderText("Data loaded successfully.")
+      
+    }, error = function(e) {
+      output$statusText <- renderText("Error loading data.")
+      message("Error: ", e$message)
+    })
+  })
+  
+  # Observe "Select All" button click
+  observeEvent(input$selectAll, {
+    updateCheckboxGroupInput(session, "species_selected", selected = unique(species_data()$Species))
+  })
+  
+  # Observe "Uncheck All" button click
+  observeEvent(input$uncheckAll, {
+    updateCheckboxGroupInput(session, "species_selected", selected = character(0))
+  })
+  
+  # Map rendering based on selected species
+  output$map <- renderLeaflet({
+    req(species_data())  # Ensure data is loaded
+    selected_species <- input$species_selected
+    
+    # Filter data based on selected species
+    filtered_data <- species_data() %>% filter(Species %in% selected_species)
+    
+    # Define color palette
+    fec_val <- filtered_data$logF_current
+    quantile_val <- filtered_data$fec_ntile
+    #pal<-colorNumeric(c("red", "blue"), fec_val)
+    pal <- colorNumeric(c("red", "blue"), quantile_val)
+    # Create popup content
+    popup_content <- paste0(
+      "<b>Species: </b>", filtered_data$Species, "<br>",
+      "<b>Tree: </b>", filtered_data$TREE_ID, "<br>",
+      "<b>Predicted Fecundity (log scale): </b>", filtered_data$logF_current, "<br>",
+      "<b>Fecundity quartile (within individual): </b>", filtered_data$fec_ntile, "<br>"
+    )
+    
+    # Generate the map
+    leaflet(filtered_data) %>%
+      addTiles() %>%
+      addCircleMarkers(
+        lng = ~X, lat = ~Y, radius = 3, color = ~pal(quantile_val),
+        opacity = 0.8, popup = popup_content
+      ) %>%
+      addLegend("bottomright", pal = pal, values = ~quantile_val, title = "", opacity = 1)
+  })
+}
+
+# Run the app
+shinyApp(ui = ui, server = server)
+
+```
+
+``` {r shiny code temp}
+
+
+      #req(total_precip_diff)
+      shp_url <- "https://raw.githubusercontent.com/r-alex-thompson/prism_data/main/FIA_CA/FIA_CA.shp"
+      shx_url <- "https://raw.githubusercontent.com/r-alex-thompson/prism_data/main/FIA_CA/FIA_CA.shx"
+      dbf_url <- "https://raw.githubusercontent.com/r-alex-thompson/prism_data/main/FIA_CA/FIA_CA.dbf"
+      cpg_url <- "https://raw.githubusercontent.com/r-alex-thompson/prism_data/main/FIA_CA/FIA_CA.cpg"  # Optional
+      
+      temp_dir <- tempdir()
+      shp_temp <- file.path(temp_dir, "FIA_CA.shp")
+      shx_temp <- file.path(temp_dir, "FIA_CA.shx")
+      dbf_temp <- file.path(temp_dir, "FIA_CA.dbf")
+      cpg_temp <- file.path(temp_dir, "FIA_CA.cpg")  # Optional
+      
+      download.file(shp_url, shp_temp, mode = "wb")
+      download.file(shx_url, shx_temp, mode = "wb")
+      download.file(dbf_url, dbf_temp, mode = "wb")
+      download.file(cpg_url, cpg_temp, mode = "wb", quiet = TRUE)
+      
+      california_shapefile <- vect(shp_temp)
+      cal_sf<-st_as_sf(california_shapefile)%>%
+        filter(species==input$species,Year==input$year)
+      cal_vec<-vect(cal_sf)
+
+      
+      
+
+if (input$species%in%c("Quercus agrifolia","Quercus chrysolepis","Quercus kelloggii")) {
+  
+# bud initiation temperature
+mon<-c(sprintf("%02d",7:9))
+years<-input$year-3
+vars<-"tmean"
+temp<-data.frame(NULL)
+# load prism data from Git
+for(i in mon) {
+  
+github_url <- paste0("https://raw.githubusercontent.com/r-alex-thompson/prism_data/main/", vars, years, i, "_bil.tif")
+
+          temp_file <- tempfile(fileext = ".tif")
+          download.file(github_url, temp_file, mode = "wb")
+          SR <- terra::rast(temp_file)
+          
+  EXT<-extract(SR,cal_vec,xy=TRUE,bind=TRUE) # here we will extract the climate data where it intersects the seed trap locations
+
+  EXT_df<-as.data.frame(EXT)%>%
+    dplyr::rename(tmean_budInit=5)
+  temp<-rbind(temp,EXT_df)
+}
+
+budTemp<-temp%>%
+  group_by(species,tree,Year,x,y)%>%
+  mutate(temp_budInit=mean(tmean_budInit))%>%
+  ungroup()%>%
+  dplyr::select(species,tree,Year,temp_budInit,x,y)%>%
+  distinct()
+
+
+
+mon<-c(sprintf("%02d",4))
+years<-input$year-2
+vars<-"tmean"
+temp<-data.frame(NULL)
+# load prism data from Git
+for(i in mon) {
+  
+github_url <- paste0("https://raw.githubusercontent.com/r-alex-thompson/prism_data/main/", vars, years, i, "_bil.tif")
+
+          temp_file <- tempfile(fileext = ".tif")
+          download.file(github_url, temp_file, mode = "wb")
+          SR <- terra::rast(temp_file)
+          
+  EXT<-extract(SR,cal_vec,xy=TRUE,bind=TRUE) # here we will extract the climate data where it intersects the seed trap locations
+
+  EXT_df<-as.data.frame(EXT)%>%
+    dplyr::rename(tmean_budInit=5)
+  temp<-rbind(temp,EXT_df)
+}
+
+
+budTemp2<-temp%>%
+  group_by(species,tree,Year,x,y)%>%
+  mutate(temp_budInit=mean(tmean_budInit))%>%
+  ungroup()%>%
+  dplyr::select(species,tree,Year,temp_budInit,x,y)%>%
+  distinct()
+
+budTemp<-rbind(budTemp,budTemp2)%>%
+  group_by(species,tree,Year,x,y)%>%
+  mutate(temp_budInit=mean(temp_budInit))%>%
+  ungroup()%>%
+  dplyr::select(species,tree,x,y,temp_budInit)%>%
+  distinct()
+
+
+# pollination temperature
+mon<-c(sprintf("%02d",5))
+years<-input$year-2
+vars<-"tmean"
+temp<-data.frame(NULL)
+# load prism data from Git
+for(i in mon) {
+  
+github_url <- paste0("https://raw.githubusercontent.com/r-alex-thompson/prism_data/main/", vars, years, i, "_bil.tif")
+
+          temp_file <- tempfile(fileext = ".tif")
+          download.file(github_url, temp_file, mode = "wb")
+          SR <- terra::rast(temp_file)
+          
+  EXT<-extract(SR,cal_vec,xy=TRUE,bind=TRUE) # here we will extract the climate data where it intersects the seed trap locations
+
+  EXT_df<-as.data.frame(EXT)%>%
+    dplyr::rename(tmean_Poll=5)
+  temp<-rbind(temp,EXT_df)
+}
+
+
+pollenTemp<-temp%>%
+  group_by(species,tree,Year,x,y)%>%
+  mutate(tmean_Poll=mean(tmean_Poll))%>%
+  ungroup()%>%
+  dplyr::select(species,tree,tmean_Poll,x,y)%>%
+  distinct()
+
+
+# fertilization
+mon<-c(sprintf("%02d",6))
+years<-input$year-2
+vars<-"tmean"
+temp<-data.frame(NULL)
+# load prism data from Git
+for(i in mon) {
+  
+github_url <- paste0("https://raw.githubusercontent.com/r-alex-thompson/prism_data/main/", vars, years, i, "_bil.tif")
+
+          temp_file <- tempfile(fileext = ".tif")
+          download.file(github_url, temp_file, mode = "wb")
+          SR <- terra::rast(temp_file)
+          
+  EXT<-extract(SR,cal_vec,xy=TRUE,bind=TRUE) # here we will extract the climate data where it intersects the seed trap locations
+
+  EXT_df<-as.data.frame(EXT)%>%
+    dplyr::rename(tmean_Fert=5)
+  temp<-rbind(temp,EXT_df)
+}
+
+
+fertTemp<-temp%>%
+  group_by(species,tree,Year,x,y)%>%
+  mutate(tmean_Fert=mean(tmean_Fert))%>%
+  ungroup()%>%
+  dplyr::select(species,tree,Year,tmean_Fert,x,y)%>%
+  distinct()
+
+mon<-c(sprintf("%02d",4:6))
+years<-input$year-2
+vars<-"tmean"
+temp<-data.frame(NULL)
+# load prism data from Git
+for(i in mon) {
+  
+github_url <- paste0("https://raw.githubusercontent.com/r-alex-thompson/prism_data/main/", vars, years, i, "_bil.tif")
+
+          temp_file <- tempfile(fileext = ".tif")
+          download.file(github_url, temp_file, mode = "wb")
+          SR <- terra::rast(temp_file)
+          
+  EXT<-extract(SR,cal_vec,xy=TRUE,bind=TRUE) # here we will extract the climate data where it intersects the seed trap locations
+
+  EXT_df<-as.data.frame(EXT)%>%
+    dplyr::rename(tmean_Fert=5)
+  temp<-rbind(temp,EXT_df)
+}
+
+
+fertTemp2<-temp%>%
+  group_by(species,tree,Year,x,y)%>%
+  mutate(tmean_Fert=mean(tmean_Fert))%>%
+  ungroup()%>%
+  dplyr::select(species,tree,Year,tmean_Fert,x,y)%>%
+  distinct()
+
+fertTemp<-rbind(fertTemp,fertTemp2)%>%
+  group_by(species,tree,Year,x,y)%>%
+  mutate(tmean_Fert=mean(tmean_Fert))%>%
+  ungroup()%>%
+  dplyr::select(species,tree,x,y,tmean_Fert)%>%
+  distinct()
+
+
+# precipitation
+mon<-c(sprintf("%02d",10:12))
+years<-input$year-4
+vars<-"ppt"
+temp<-data.frame(NULL)
+# load prism data from Git
+for(i in mon) {
+  
+github_url <- paste0("https://raw.githubusercontent.com/r-alex-thompson/prism_data/main/", vars, years, i, "_bil.tif")
+
+          temp_file <- tempfile(fileext = ".tif")
+          download.file(github_url, temp_file, mode = "wb")
+          SR <- terra::rast(temp_file)
+          
+  EXT<-extract(SR,cal_vec,xy=TRUE,bind=TRUE) # here we will extract the climate data where it intersects the seed trap locations
+
+  EXT_df<-as.data.frame(EXT)%>%
+    dplyr::rename(ppt_budInit=5)
+  temp<-rbind(temp,EXT_df)
+}
+
+budPrecip<-temp%>%
+  group_by(species,tree,Year,x,y)%>%
+  mutate(ppt_budInit=sum(ppt_budInit))%>%
+  ungroup()%>%
+  dplyr::select(species,tree,Year,ppt_budInit,x,y)%>%
+  distinct()
+
+
+
+mon<-c(sprintf("%02d",1:4))
+years<-input$year-3
+vars<-"ppt"
+temp<-data.frame(NULL)
+# load prism data from Git
+for(i in mon) {
+  
+github_url <- paste0("https://raw.githubusercontent.com/r-alex-thompson/prism_data/main/", vars, years, i, "_bil.tif")
+
+          temp_file <- tempfile(fileext = ".tif")
+          download.file(github_url, temp_file, mode = "wb")
+          SR <- terra::rast(temp_file)
+          
+  EXT<-extract(SR,cal_vec,xy=TRUE,bind=TRUE) # here we will extract the climate data where it intersects the seed trap locations
+
+  EXT_df<-as.data.frame(EXT)%>%
+    dplyr::rename(ppt_budInit=5)
+  temp<-rbind(temp,EXT_df)
+}
+
+
+budPrecip2<-temp%>%
+  group_by(species,tree,Year,x,y)%>%
+  mutate(ppt_budInit=sum(ppt_budInit))%>%
+  ungroup()%>%
+  dplyr::select(species,tree,Year,ppt_budInit,x,y)%>%
+  distinct()
+
+budPrecip<-rbind(budPrecip,budPrecip2)%>%
+  group_by(species,tree,Year,x,y)%>%
+  mutate(ppt_budInit=sum(ppt_budInit))%>%
+  ungroup()%>%
+  dplyr::select(species,tree,x,y,ppt_budInit)%>%
+  distinct()
+
+
+# precip at pollination
+mon<-c(sprintf("%02d",10:12))
+years<-input$year-3
+vars<-"ppt"
+temp<-data.frame(NULL)
+# load prism data from Git
+for(i in mon) {
+  
+github_url <- paste0("https://raw.githubusercontent.com/r-alex-thompson/prism_data/main/", vars, years, i, "_bil.tif")
+
+          temp_file <- tempfile(fileext = ".tif")
+          download.file(github_url, temp_file, mode = "wb")
+          SR <- terra::rast(temp_file)
+          
+  EXT<-extract(SR,cal_vec,xy=TRUE,bind=TRUE) # here we will extract the climate data where it intersects the seed trap locations
+
+  EXT_df<-as.data.frame(EXT)%>%
+    dplyr::rename(ppt_Poll=5)
+  temp<-rbind(temp,EXT_df)
+}
+
+pollPrecip<-temp%>%
+  group_by(species,tree,Year,x,y)%>%
+  mutate(ppt_Poll=sum(ppt_Poll))%>%
+  ungroup()%>%
+  dplyr::select(species,tree,Year,ppt_Poll,x,y)%>%
+  distinct()
+
+
+
+mon<-c(sprintf("%02d",1:4))
+years<-input$year-2
+vars<-"ppt"
+temp<-data.frame(NULL)
+# load prism data from Git
+for(i in mon) {
+  
+github_url <- paste0("https://raw.githubusercontent.com/r-alex-thompson/prism_data/main/", vars, years, i, "_bil.tif")
+
+          temp_file <- tempfile(fileext = ".tif")
+          download.file(github_url, temp_file, mode = "wb")
+          SR <- terra::rast(temp_file)
+          
+  EXT<-extract(SR,cal_vec,xy=TRUE,bind=TRUE) # here we will extract the climate data where it intersects the seed trap locations
+
+  EXT_df<-as.data.frame(EXT)%>%
+    dplyr::rename(ppt_Poll=5)
+  temp<-rbind(temp,EXT_df)
+}
+
+
+pollPrecip2<-temp%>%
+  group_by(species,tree,Year,x,y)%>%
+  mutate(ppt_Poll=sum(ppt_Poll))%>%
+  ungroup()%>%
+  dplyr::select(species,tree,Year,ppt_Poll,x,y)%>%
+  distinct()
+
+pollPrecip<-rbind(pollPrecip,pollPrecip2)%>%
+  group_by(species,tree,Year,x,y)%>%
+  mutate(ppt_Poll=sum(ppt_Poll))%>%
+  ungroup()%>%
+  dplyr::select(species,tree,x,y,ppt_Poll)%>%
+  distinct()
+
+
+# precip at fertilization
+mon<-c(sprintf("%02d",10:12))
+years<-input$year-2
+vars<-"ppt"
+temp<-data.frame(NULL)
+# load prism data from Git
+for(i in mon) {
+  
+github_url <- paste0("https://raw.githubusercontent.com/r-alex-thompson/prism_data/main/", vars, years, i, "_bil.tif")
+
+          temp_file <- tempfile(fileext = ".tif")
+          download.file(github_url, temp_file, mode = "wb")
+          SR <- terra::rast(temp_file)
+          
+  EXT<-extract(SR,cal_vec,xy=TRUE,bind=TRUE) # here we will extract the climate data where it intersects the seed trap locations
+
+  EXT_df<-as.data.frame(EXT)%>%
+    dplyr::rename(ppt_Fert=5)
+  temp<-rbind(temp,EXT_df)
+}
+
+fertPrecip<-temp%>%
+  group_by(species,tree,Year,x,y)%>%
+  mutate(ppt_Fert=sum(ppt_Fert))%>%
+  ungroup()%>%
+  dplyr::select(species,tree,Year,ppt_Fert,x,y)%>%
+  distinct()
+
+
+
+mon<-c(sprintf("%02d",1:4))
+years<-input$year-1
+vars<-"ppt"
+temp<-data.frame(NULL)
+# load prism data from Git
+for(i in mon) {
+  
+github_url <- paste0("https://raw.githubusercontent.com/r-alex-thompson/prism_data/main/", vars, years, i, "_bil.tif")
+
+          temp_file <- tempfile(fileext = ".tif")
+          download.file(github_url, temp_file, mode = "wb")
+          SR <- terra::rast(temp_file)
+          
+  EXT<-extract(SR,cal_vec,xy=TRUE,bind=TRUE) # here we will extract the climate data where it intersects the seed trap locations
+
+  EXT_df<-as.data.frame(EXT)%>%
+    dplyr::rename(ppt_Fert=5)
+  temp<-rbind(temp,EXT_df)
+}
+
+
+fertPrecip2<-temp%>%
+  group_by(species,tree,Year,x,y)%>%
+  mutate(ppt_Fert=sum(ppt_Fert))%>%
+  ungroup()%>%
+  dplyr::select(species,tree,Year,ppt_Fert,x,y)%>%
+  distinct()
+
+fertPrecip<-rbind(fertPrecip,fertPrecip2)%>%
+  group_by(species,tree,Year,x,y)%>%
+  mutate(ppt_Fert=sum(ppt_Fert))%>%
+  ungroup()%>%
+  dplyr::select(species,tree,x,y,ppt_Fert)%>%
+  distinct()
+
+
+quercusClim_p<-full_join(budPrecip,pollPrecip)%>%
+  full_join(.,fertPrecip)
+quercusClim_t<-full_join(budTemp,pollenTemp)%>%
+  full_join(.,fertTemp)%>%
+  rename(Tree=tree,Species=species,X=x,Y=y)%>%
+  dplyr::select(temp_budInit,tmean_Poll,tmean_Fert)
+quercusClim<-cbind(quercusClim_p,quercusClim_t)
+
+
+
+
+
+
+
+
+
+library(shiny)
+library(shinyWidgets)
+library(leaflet)
+library(terra)
+library(sp)
+library(rnaturalearth)  # For downloading country and state boundaries
+library(rnaturalearthhires)
+library(raster)
+library(showtext)
+font_add_google("Montserrat", "MS")
+showtext_auto()
+
+# Define UI for the app
+ui <- fluidPage(
+  setBackgroundColor("black"),
+  
+  tags$h1("California Mast Prediction Tool", style = "color: white; font-family: 'MS'"),
+  
+  # HERE I WANT TO ADD A SIDEBAR PANEL INPUT OPTION TO ENTER MAP COORDINATES AND SET A BUFFER SIZE TO LOOK AT FECUNDITY OVER AN AREA RATHER THAN A SPECIFIC TREE
+  
+  sidebarLayout(
+    sidebarPanel(
+      numericInput("year", "Select Year:", value = 2010, min = 1990, max = 2020),
+      selectInput("species", "Select Species:", choices=c("Abies magnifica", "Abies grandis","Abies concolor","Pinus ponderosa","Pinus contorta","Pinus jeffreyi","Pinus monticola","Pinus lambertiana","Quercus agrifolia","Quercus kelloggii", "Quercus chrysolepis")),
+      actionButton("loadMap", "Load and Map Precipitation"),
+      uiOutput("speciesFilter"),  # Dynamic UI for species checkboxes
+      actionButton("selectAll", "Select All Species"),  # Button to select all species
+      actionButton("uncheckAll", "Uncheck All Species") 
+    ),
+    mainPanel(
+      leafletOutput("map"),
+      textOutput("statusText")
+    )
+  )
+)
+
+# Define server logic
+server <- function(input, output, session) {
+  
+  #total_precip_dev <- reactiveVal(NULL)
+  #mean_temp_dev <- reactiveVal(NULL)
+  sp_dat <- reactiveVal(NULL)
+  
+  observeEvent(input$loadMap, {
+    req(input$year)  # Ensure a year is selected
+    message("Year selected: ", input$year)
+    message("Species selected: ", input$species)
+    
+    year_selected <- input$year
+    previous_year <- year_selected - 1
+    
+    #months <- c(sprintf("%02d", 10:12), sprintf("%02d", 1:3))  # Oct (10) to Mar (03)
+    
+  if(input$species%in%c("Abies concolor","Abies magnifica","Abies grandis")) {
+    # first let's start with bud initiation
+      bud<-data.frame(month=c(sprintf("%02d", 4:10)),year=c(year_selected,previous_year,previous_year,previous_year,previous_year,previous_year,previous_year)) # need to remember that the april here only applies for the current year and 5:10 is 1-year prior
+      poll<-data.frame(c(sprintf("%02d", 5)),c(year_selected)) # this is current year
+      fert<-data.frame(c(sprintf("%02d", 6:8)),c(year_selected)) # this is current year
+  }
+    if(input$species%in%c("Pinus ponderosa","Pinus contorta","Pinus jeffreyi","Pinus monticola","Pinus lambertiana")) {
+        bud<- data.frame(month = c(sprintf("%02d", 8:10)),year=c(year_selected-3)) # t-3 years
+        poll<- data.frame(month = c(sprintf("%02d", 4:8)),year=c(year_selected-2)) # t-2 years
+        fert<-data.frame(month = c(sprintf("%02d", 5:10)),year=c(year_selected-1)) # t-1 years
+    }
+    
+    if(input$species%in%c("Quercus agrifolia","Quercus kelloggii", "Quercus chrysolepis")) {
+       bud<-data.frame(month = c(sprintf("%02d", 4),sprintf("%02d", 6:9)),year=c(year_selected-2,,year=c(year_selected-3)),year=c(year_selected-3)),year=c(year_selected-3)),year=c(year_selected-3)))) # april is t-2 years, july - sept is t-3 years
+       poll<-data.frame(month = c(sprintf("%02d", 4)),year=c(year_selected-2))  # t-2 years
+       fert<-data.frame(month = c(sprintf("%02d", 4:6)),year=c(year_selected-1))  # t-1 years
+    }
+    
+    # I NEED TO FIGURE OUT HOW TO LOOP OVER EACH STAGE AND COLLATE THE DATA PROPERLY
+    # I SHOULD ALSO GET IT TO RUN FOR ALL PREVIOUS YEARS AS WELL AS A SORT OF DATA CHECK FOR FOLKS TO BASE OFF OF PREVIOUS COLLECTIONS
+    # THIS WILL HELP WHEN RUNNING CODE TO GENERATE A TIME-SERIES OF HISTORICAL FECUNDITY PREDICTIONS FOR A GIVEN LOCATION
+    
+    p_months<-c(sprintf("%02d",10:12),sprintf("%02d",1:4))
+    
+    
+    # Debugging message before the loop
+    message("Starting to process precipitation normals...")
+    
+    
+    # First, get the normals
+    total_precip_norm <- NULL
+    withProgress(message = 'Downloading and processing precipitation data...', value = 0, {
+      for(j in c("bud","poll","fert")) {
+        phase<-j
+      
+      for (i in seq_along(months[,1])) {
+        message("Processing precipitation normals for month: ", months[i,1])
+        incProgress(1 / length(months), detail = paste("Processing month", months[i,1]))
+        month <- months[i,1]
+        github_url <- paste0("https://raw.githubusercontent.com/r-alex-thompson/prism_data/main/ppt_normal_", month, "_bil.tif")
+        
+        tryCatch({
+          temp_file <- tempfile(fileext = ".tif")
+          download.file(github_url, temp_file, mode = "wb")
+          normal_precip_raster <- terra::rast(temp_file)
+          
+          if (is.null(total_precip_norm)) {
+            total_precip_norm <- normal_precip_raster
+          } else {
+            total_precip_norm <- total_precip_norm + normal_precip_raster
+          }
+        }, error = function(e) {
+          message("Error downloading precipitation normal data: ", e)
+        })
+      }
+        
+        # now use the same set of months to get the current observed precip
+        for (i in seq_along(months[,1])) {
+        message("Processing precipitation data for month: ", months[i,1])
+        incProgress(1 / length(months), detail = paste("Processing month", months[i,1]))
+        
+        year <- months[i,2]
+        month <- months[i,1]
+        
+        github_url <- paste0("https://raw.githubusercontent.com/r-alex-thompson/prism_data/main/ppt", year, month, "_bil.tif")
+        
+        tryCatch({
+          temp_file <- tempfile(fileext = ".tif")
+          download.file(github_url, temp_file, mode = "wb")
+          monthly_precip_raster <- terra::rast(temp_file)
+          
+          if (is.null(total_precip_raster)) {
+            total_precip_raster <- monthly_precip_raster
+          } else {
+            total_precip_raster <- total_precip_raster + monthly_precip_raster
+          }
+          
+           # Check if total_precip_raster and total_precip_norm are NULL before assignment
+          if (!is.null(total_precip_raster) && !is.null(total_precip_norm)) {
+            total_precip_diff<-(total_precip_raster - total_precip_norm)
+            message("Total precipitation deviation calculated.")
+          } else {
+            message("Error: total_precip_raster or total_precip_norm is NULL.")
+          }
+          
+          
+        }, error = function(e) {
+          message("Error downloading precipitation data: ", e)
+        })
+      }
+        
+        
+        
+        
+    })
+    
+    # OK THIS WORKS BUT NOW I NEED TO RUN FOR BELOW, AS WELL
+    
+        # Checking if total_precip_norm is properly set
+    if (is.null(total_precip_norm)) {
+      message("total_precip_norm is NULL.")
+    } else {
+      message("total_precip_norm is set.")
+    }
+    
+    # here we get each month's raster data for the selected seed production year
+    # I need to dynamically set this for each species and reproductive phase
+    
+    # test case is to start with Abies
+    total_precip_raster <- NULL
+    req(total_precip_norm)
+    
+    message("Starting to process precipitation data...")
+    
+    withProgress(message = 'Downloading and processing data...', value = 0, {
+      
+      
+      
+        assign(paste(j,"total_precip_diff",sep="_"),total_precip_diff)}}
+    })
+
+        # Debugging after precipitation is calculated
+    if (is.null(total_precip_diff)) {
+      message("total_precip_diff is NULL.")
+    } else {
+      message("total_precip_diff is set.")
+    }
+    
+    
+    
+    # Loading the shapefile
+    tryCatch({
+      req(total_precip_diff)
+      shp_url <- "https://raw.githubusercontent.com/r-alex-thompson/prism_data/main/FIA_CA/FIA_CA.shp"
+      shx_url <- "https://raw.githubusercontent.com/r-alex-thompson/prism_data/main/FIA_CA/FIA_CA.shx"
+      dbf_url <- "https://raw.githubusercontent.com/r-alex-thompson/prism_data/main/FIA_CA/FIA_CA.dbf"
+      cpg_url <- "https://raw.githubusercontent.com/r-alex-thompson/prism_data/main/FIA_CA/FIA_CA.cpg"  # Optional
+      
+      temp_dir <- tempdir()
+      shp_temp <- file.path(temp_dir, "FIA_CA.shp")
+      shx_temp <- file.path(temp_dir, "FIA_CA.shx")
+      dbf_temp <- file.path(temp_dir, "FIA_CA.dbf")
+      cpg_temp <- file.path(temp_dir, "FIA_CA.cpg")  # Optional
+      
+      download.file(shp_url, shp_temp, mode = "wb")
+      download.file(shx_url, shx_temp, mode = "wb")
+      download.file(dbf_url, dbf_temp, mode = "wb")
+      download.file(cpg_url, cpg_temp, mode = "wb", quiet = TRUE)
+      
+      california_shapefile <- vect(shp_temp)
+      req(total_precip_diff)
+      precip_values <- terra::extract(total_precip_diff, california_shapefile, fun = mean, na.rm = TRUE, xy = TRUE)
+      
+      names(precip_values)[2] <- "precip"
+      species_precip_data <- cbind(data.frame(california_shapefile), precip_values)
+      
+    }, error = function(e) {
+      message("Error loading shapefile: ", e)
+    })
+    
+    
+    
+    
+    # Temperature data handling follows similar structure as precipitation
+    months <- c(sprintf("%02d", 5:8))  # growing season temperature for now
+    
+    # Debugging message before starting temperature processing
+    message("Starting to process temperature normals...")
+    
+    mean_temp_norm <- NULL
+    withProgress(message = 'Downloading and processing temperature data...', value = 0, {
+      for (i in seq_along(months)) {
+        message("Processing temperature normal for month: ", months[i])
+        incProgress(1 / length(months), detail = paste("Processing month", months[i]))
+        month <- months[i]
+        github_url <- paste0("https://raw.githubusercontent.com/r-alex-thompson/prism_data/main/tmean_normal_", month, "_bil.tif")
+        
+        tryCatch({
+          temp_file <- tempfile(fileext = ".tif")
+          download.file(github_url, temp_file, mode = "wb")
+          normal_tmnean_raster <- terra::rast(temp_file)
+          
+          if (is.null(mean_temp_norm)) {
+            mean_temp_norm <- normal_tmnean_raster
+          } else {
+            mean_temp_norm <- mean_temp_norm + normal_tmnean_raster
+          }
+        }, error = function(e) {
+          message("Error downloading temperature normal data: ", e)
+        })
+      }
+      mean_temp_norm <- mean_temp_norm / length(mean_temp_norm)  # Normalize by number of months
+      
+      
+          # Debugging after the temperature normals are calculated
+      if (is.null(mean_temp_norm)) {
+        message("mean_temp_norm is NULL.")
+      } else {
+        message("mean_temp_norm is set.")
+      }
+    })
+    
+    mean_temp_raster <- NULL
+    req(mean_temp_norm)
+    
+    message("Starting to process temperature data...")
+    
+    withProgress(message = 'Downloading and processing temperature data...', value = 0, {
+      for (i in seq_along(months)) {
+        message("Processing temperature data for month: ", months[i])
+        incProgress(1 / length(months), detail = paste("Processing month", months[i]))
+        
+        year <- year_selected
+        month <- months[i]
+        github_url <- paste0("https://raw.githubusercontent.com/r-alex-thompson/prism_data/main/tmean", year, month, "_bil.tif")
+        
+        tryCatch({
+          temp_file <- tempfile(fileext = ".tif")
+          download.file(github_url, temp_file, mode = "wb")
+          monthly_tmean_raster <- terra::rast(temp_file)
+          
+          if (is.null(mean_temp_raster)) {
+            mean_temp_raster <- monthly_tmean_raster
+          } else {
+            mean_temp_raster <- mean_temp_raster + monthly_tmean_raster
+          }
+        }, error = function(e) {
+          message("Error downloading temperature data: ", e)
+        })
+      }
+      
+      mean_temp_raster <- mean_temp_raster / length(mean_temp_raster)  # Normalize by number of months
+      
+        # Check if the temp rasters are properly set before calculating the deviation
+      if (!is.null(mean_temp_raster) && !is.null(mean_temp_norm)) {
+        mean_temp_diff<-(mean_temp_raster - mean_temp_norm)
+        names(mean_temp_diff) <- "Temperature"
+        message("Temperature deviation calculated.")
+      } else {
+        message("Error: mean_temp_raster or mean_temp_norm is NULL.")
+      }
+ 
+      
+    })
+    
+        # Extract temperature values from the shapefile
+    tryCatch({
+    temp_values <- terra::extract(mean_temp_diff, california_shapefile, fun = mean, na.rm = TRUE, xy = TRUE)
+    
+    if (is.null(temp_values)) {
+      message("temp_values is NULL.")
+    } else {
+      message("temp_values extracted successfully.")
+    }
+    
+    names(temp_values)[2] <- "temp"
+    species_temp_data <- cbind(data.frame(california_shapefile), temp_values)
+    
+    # Combine temperature and precipitation data
+    print(str(species_precip_data))
+    print(str(species_temp_data))
+    precip<-species_precip_data$precip
+    species_clim<-cbind(species_temp_data,precip)
+    species_clim$temp<-round(species_clim$temp,2)
+    species_clim$precip<-round(species_clim$precip,2)
+    #species_clim <- merge(species_precip_data, species_temp_data,by=c("x","y","Year"))
+    print(str(species_clim))
+    sp_dat(species_clim)
+    
+    message("Data combined and ready for mapping.")
+  })
+    # Create dynamic UI for species filter (checkboxes)
+    output$speciesFilter <- renderUI({
+      req(sp_dat())
+      species_list <- unique(sp_dat()$species)  # Get the unique species list
+      checkboxGroupInput("species_selected", "Select Species:", choices = species_list, selected = species_list)
+    })
+  #req(sp_dat())  # Ensure sp_dat is available before rendering the map
+  })
+  
+    # Observe "Select All" button click
+    observeEvent(input$selectAll, {
+      species_list <- unique(sp_dat()$species)  # Get all species
+      updateCheckboxGroupInput(session, "species_selected", selected = species_list)  # Select all species
+    })
+    
+    # Observe "Uncheck All" button click
+    observeEvent(input$uncheckAll, {
+      updateCheckboxGroupInput(session, "species_selected", selected = character(0))  # Uncheck all species
+    })
+  
+    # Map rendering
+output$map <- renderLeaflet({
+      req(sp_dat())  # Check that sp_dat is available
+  
+  selected_species <- input$species_selected 
+  species_data <- sp_dat()[sp_dat()$species %in% selected_species, ] 
+      
+      species_values <- species_data$species
+      
+      c25 <- c(
+  "dodgerblue2", "#E31A1C", # red
+  "green4",
+  "#6A3D9A", # purple
+  "#FF7F00", # orange
+  "black", "gold1",
+  "skyblue2", "#FB9A99", # lt pink
+  "palegreen2",
+  "#CAB2D6", # lt purple
+  "#FDBF6F", # lt orange
+  "gray70", "khaki2",
+  "maroon", "orchid1", "deeppink1", "blue1", "steelblue4",
+  "darkturquoise", "green1", "yellow4", "yellow3",
+  "darkorange4", "brown"
+)
+      
+      pal <- colorFactor(palette = c25, domain = species_values)
+  
+  # Create a popup content for each point (customizable to show any detail you want)
+  popup_content <- paste0(
+    "<b>Species: </b>", species_data$species, "<br>",
+    "<b>Tree: </b>", species_data$tree,"<br>",
+    "<b>Precipitation Deficit (mm): </b>", species_data$precip, "<br>",
+    "<b>Temperature Deviation (Deg. C): </b>", species_data$temp, "<br>",
+    "<b>DBH (cm): </b>", species_data$diam)
+  
+  # Proceed only if sp_dat is valid
+  leaflet(species_data) %>%
+    addTiles() %>%
+    addCircleMarkers(lng = species_data$x, lat = species_data$y, radius = 3, color = ~pal(species_values),  # Use the color palette
+                     opacity = 0.8,
+                     popup = popup_content)%>%
+  addLegend("bottomright", pal = pal, values = ~species_values,
+    title = "",
+    opacity = 1
+  )
+})
+  
+}
+    
+    
+# Run the app
+
+shinyApp(ui = ui, server = server)
+
+
+```
+
+
+
+``` {r temp file management stuff}
+files<-list.files(path="/Users/alexthompson/Dropbox/Postdoc/Moran Lab Postdoc/Data/climate/Norm_2/",pattern="_bil")
+setwd("/Users/alexthompson/Dropbox/Postdoc/Moran Lab Postdoc/Data/climate/PRISM Rasters")
+
+for(i in files) {
+  nwepath<-paste("/Users/alexthompson/Dropbox/Postdoc/Moran Lab Postdoc/Data/climate/Norm_2/",i,"/",sep="")
+  new<-list.files(path=nwepath,pattern="_bil.bil")
+  new2<-raster(paste(nwepath,new[1],sep=""))
+  inew<-sub("PRISM_","",new[1])
+  inew2<-sub("_30yr","",inew)
+  inew3<-sub("_4kmM4","",inew2)
+  inew4<-sub("_4kmM5","",inew3)
+  
+  raster::writeRaster(new2,filename=inew4,overwrite=TRUE,format="GTiff")
+  
+}
+
+```
